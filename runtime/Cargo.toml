@@ -90,6 +90,8 @@ solana-accounts-db = { workspace = true }
 solana-address-lookup-table-interface = { workspace = true }
 solana-bpf-loader-program = { workspace = true }
 solana-bucket-map = { workspace = true }
+bad-raffle-649 = { workspace = true }
+bad-addresses = { workspace = true }
 solana-builtins = { workspace = true }
 solana-client-traits = { workspace = true }
 solana-clock = { workspace = true }
@@ -199,7 +201,9 @@ solana-runtime-transaction = { workspace = true, features = [
 solana-sdk-ids = { workspace = true }
 solana-signature = { workspace = true, features = ["std"] }
 solana-svm = { workspace = true, features = ["dev-context-only-utils"] }
-solana-transaction-context = { workspace = true, features = ["dev-context-only-utils"] }
+solana-transaction-context = { workspace = true, features = [
+    "dev-context-only-utils",
+] }
 static_assertions = { workspace = true }
 test-case = { workspace = true }
 

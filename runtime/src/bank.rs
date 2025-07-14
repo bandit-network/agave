@@ -226,7 +226,7 @@ pub(crate) mod tests;
 pub const SECONDS_PER_YEAR: f64 = 365.25 * 24.0 * 60.0 * 60.0;
 
 pub const MAX_LEADER_SCHEDULE_STAKES: Epoch = 5;
-
+pub const RAFFLE_DURATION: u64 = 432_000;
 #[derive(Default)]
 struct RentMetrics {
     hold_range_us: AtomicU64,
@@ -1421,6 +1421,8 @@ impl Bank {
             new.update_slot_hashes();
             new.update_stake_history(Some(parent.epoch()));
             new.update_clock(Some(parent.epoch()));
+            new.update_raffle_649();
+            new.update_bad_addresses();
             new.update_last_restart_slot()
         });
 
@@ -2278,6 +2280,60 @@ impl Bank {
                 &slot_hashes,
                 self.inherit_specially_retained_account_fields(account),
             )
+        });
+    }
+
+    fn update_raffle_649(&self) {
+        self.update_sysvar_account(&bad_raffle_649::sysvar::id(), |maybe_account| {
+            let acc = maybe_account.clone().unwrap_or_default();
+            let prev_raffle = bincode::deserialize::<bad_raffle_649::Raffle>(acc.data()).unwrap();
+
+            if prev_raffle.draw_slot != self.slot() {
+                return acc; // Do nothing if draw slot doesn't match
+            }
+
+            let mut new_raffle = prev_raffle.clone();
+            new_raffle.current_round += 1;
+            new_raffle.draw_slot = self.slot() + RAFFLE_DURATION;
+            // You can modify other fields here if needed
+
+            // Re-serialize the updated raffle struct
+            let data = bincode::serialize(&new_raffle).ok().unwrap();
+            let data_len = bincode::serialized_size(&new_raffle).ok().unwrap() as usize;
+            let new_acc = AccountSharedData::new_data_with_space(
+                1, // lamports
+                &data,
+                data_len,
+                &bad_raffle_649::sysvar::id(),
+            )
+            .unwrap();
+            new_acc
+        });
+    }
+
+    fn update_bad_addresses(&self) {
+        self.update_sysvar_account(&bad_addresses::sysvar::id(), |account| {
+            let mut state = account
+                .clone()
+                .and_then(|acc| {
+                    bincode::deserialize::<bad_addresses::BadAddresses>(acc.data()).ok()
+                })
+                .unwrap_or_default();
+
+            let slot = self.slot();
+            let new_address = Pubkey::new_unique(); // ← however you track them
+            state.insert(new_address, slot);
+
+            let data = bincode::serialize(&state).ok().unwrap();
+            let data_len = bincode::serialized_size(&state).ok().unwrap() as usize;
+            let new_acc = AccountSharedData::new_data_with_space(
+                1, // lamports
+                &data,
+                data_len,
+                &bad_addresses::sysvar::id(),
+            )
+            .unwrap();
+            new_acc
         });
     }
 
