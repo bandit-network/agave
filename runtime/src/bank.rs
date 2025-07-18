@@ -1421,7 +1421,7 @@ impl Bank {
             new.update_slot_hashes();
             new.update_stake_history(Some(parent.epoch()));
             new.update_clock(Some(parent.epoch()));
-            new.update_raffle_649();
+            // new.update_raffle_649();
             new.update_bad_addresses();
             new.update_last_restart_slot()
         });
@@ -2283,57 +2283,87 @@ impl Bank {
         });
     }
 
-    fn update_raffle_649(&self) {
-        self.update_sysvar_account(&bad_raffle_649::sysvar::id(), |maybe_account| {
-            let acc = maybe_account.clone().unwrap_or_default();
-            let prev_raffle = bincode::deserialize::<bad_raffle_649::Raffle>(acc.data()).unwrap();
+    // fn update_raffle_649(&self) {
+    //     self.update_sysvar_account(&bad_raffle_649::sysvar::id(), |maybe_account| {
+    //         let acc = maybe_account.clone().unwrap_or_default();
+    //         let prev_raffle = bincode::deserialize::<bad_raffle_649::Raffle>(acc.data()).unwrap();
 
-            if prev_raffle.draw_slot != self.slot() {
-                return acc; // Do nothing if draw slot doesn't match
-            }
+    //         if prev_raffle.draw_slot != self.slot() {
+    //             return acc; // Do nothing if draw slot doesn't match
+    //         }
 
-            let mut new_raffle = prev_raffle.clone();
-            new_raffle.current_round += 1;
-            new_raffle.draw_slot = self.slot() + RAFFLE_DURATION;
-            // You can modify other fields here if needed
+    //         let mut new_raffle = prev_raffle.clone();
+    //         new_raffle.current_round += 1;
+    //         new_raffle.draw_slot = self.slot() + RAFFLE_DURATION;
+    //         // You can modify other fields here if needed
 
-            // Re-serialize the updated raffle struct
-            let data = bincode::serialize(&new_raffle).ok().unwrap();
-            let data_len = bincode::serialized_size(&new_raffle).ok().unwrap() as usize;
-            let new_acc = AccountSharedData::new_data_with_space(
-                1, // lamports
-                &data,
-                data_len,
-                &bad_raffle_649::sysvar::id(),
-            )
-            .unwrap();
-            new_acc
-        });
-    }
+    //         // Re-serialize the updated raffle struct
+    //         let data = bincode::serialize(&new_raffle).ok().unwrap();
+    //         let data_len = bincode::serialized_size(&new_raffle).ok().unwrap() as usize;
+    //         let new_acc = AccountSharedData::new_data_with_space(
+    //             1, // lamports
+    //             &data,
+    //             data_len,
+    //             &bad_raffle_649::sysvar::id(),
+    //         )
+    //         .unwrap();
+    //         new_acc
+    //     });
+    // }
 
     fn update_bad_addresses(&self) {
-        self.update_sysvar_account(&bad_addresses::sysvar::id(), |account| {
-            let mut state = account
-                .clone()
-                .and_then(|acc| {
-                    bincode::deserialize::<bad_addresses::BadAddresses>(acc.data()).ok()
-                })
-                .unwrap_or_default();
+        self.update_sysvar_account(&bad_addresses::sysvar::id(), |maybe_account| {
+            // Step 1: Deserialize or default
+            let mut state = match maybe_account.as_ref().and_then(|acc| {
+                bincode::deserialize::<bad_addresses::BadAddresses>(acc.data()).ok()
+            }) {
+                Some(state) => {
+                    info!(
+                        "Deserialized existing BadAddresses sysvar with {} entries",
+                        state.len()
+                    );
+                    state
+                }
+                None => {
+                    warn!("BadAddresses sysvar not found or failed to deserialize, using default");
+                    bad_addresses::BadAddresses::default()
+                }
+            };
 
+            // Step 2: Add new entry
             let slot = self.slot();
-            let new_address = Pubkey::new_unique(); // ← however you track them
+            let new_address = Pubkey::new_unique();
             state.insert(new_address, slot);
+            info!("Inserted new bad address: {} at slot {}", new_address, slot);
 
-            let data = bincode::serialize(&state).ok().unwrap();
-            let data_len = bincode::serialized_size(&state).ok().unwrap() as usize;
-            let new_acc = AccountSharedData::new_data_with_space(
+            // Step 3: Serialize updated state
+            let data = match bincode::serialize(&state) {
+                Ok(d) => d,
+                Err(e) => {
+                    error!("Failed to serialize updated BadAddresses state: {:?}", e);
+                    return maybe_account.clone().unwrap_or_default(); // skip update if serialization fails
+                }
+            };
+
+            let data_len = data.len();
+            info!("Serialized BadAddresses with {} bytes", data_len);
+
+            // Step 4: Create updated sysvar account
+            match AccountSharedData::new_data_with_space(
                 1, // lamports
                 &data,
                 data_len,
                 &bad_addresses::sysvar::id(),
-            )
-            .unwrap();
-            new_acc
+            ) {
+                Ok(acc) => {
+                    info!("Created new BadAddresses sysvar account successfully");
+                    acc
+                }
+                Err(e) => {
+                    error!("Failed to create updated BadAddresses account: {:?}", e);
+                    maybe_account.clone().unwrap_or_default()
+                }
+            }
         });
     }
 

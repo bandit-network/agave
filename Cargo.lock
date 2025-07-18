@@ -1174,9 +1174,9 @@ dependencies = [
 
 [[package]]
 name = "bad-raffle-649"
-version = "0.0.1"
+version = "0.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ea975a5d66b170c47c6ddb4dfaf2ec2350ab44a6649d45abe5517e8adcb6ed11"
+checksum = "a0a075a016dc39b88ab9eca7ef979946444718c96611c7db890aa8205f01b107"
 dependencies = [
  "bincode",
  "serde",
