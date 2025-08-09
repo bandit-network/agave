@@ -10,7 +10,7 @@ use {
     solana_runtime_transaction::transaction_with_meta::TransactionWithMeta,
     solana_svm::rent_calculator::{get_account_rent_state, transition_allowed},
     solana_system_interface::program as system_program,
-    std::{result::Result, sync::atomic::Ordering::Relaxed},
+    std::{result::Result, str::FromStr, sync::atomic::Ordering::Relaxed},
     thiserror::Error,
 };
 
@@ -54,11 +54,43 @@ impl Bank {
             return;
         }
 
-        let FeeDistribution { deposit, burn } =
+        let FeeDistribution { deposit, burn: reward_pool } =
             self.calculate_reward_and_burn_fee_details(&fee_details);
 
-        let total_burn = self.deposit_or_burn_fee(deposit).saturating_add(burn);
-        self.capitalization.fetch_sub(total_burn, Relaxed);
+        // TODO: This is a temporary solution to distribute fees to the reward pool.
+        let program_id = Pubkey::from_str("2VNA3gBzN1u2eW3zTvj8799eq564s5xCASHtwa1RXYG5").unwrap();
+        let current_raffle_seed: &[u8] = b"bad_current_raffle";
+
+        let reward_pool_pubkey = Pubkey::find_program_address(&[current_raffle_seed], &program_id).0;
+        match self.deposit_to_reward_pool(&reward_pool_pubkey, reward_pool) {
+            Ok(post_balance) => {
+                self.rewards.write().unwrap().push((
+                    reward_pool_pubkey,
+                    RewardInfo {
+                        reward_type: RewardType::Fee,
+                        lamports: reward_pool as i64,
+                        post_balance,
+                        commission: None,
+                    },
+                ));
+            }
+            Err(err) => {
+                debug!(
+                    "Burned {} lamport tx fee instead of sending to {} due to {}",
+                    reward_pool, reward_pool_pubkey, err
+                );
+                datapoint_warn!(
+                    "bank-burned_fee",
+                    ("slot", self.slot(), i64),
+                    ("num_lamports", reward_pool, i64),
+                    ("error", err.to_string(), String),
+                );
+            }
+        }
+
+        // let total_burn = self.deposit_or_burn_fee(deposit).saturating_add(burn);
+        let deposit_failed_burn = self.deposit_or_burn_fee(deposit);
+        self.capitalization.fetch_sub(deposit_failed_burn, Relaxed);
     }
 
     pub fn calculate_reward_for_transaction(
@@ -164,6 +196,42 @@ impl Bank {
             get_account_rent_state(&self.rent_collector().rent, &account);
         let rent_state_transition_allowed =
             transition_allowed(&recipient_pre_rent_state, &recipient_post_rent_state);
+        if !rent_state_transition_allowed {
+            return Err(DepositFeeError::InvalidRentPayingAccount);
+        }
+
+        self.store_account(pubkey, &account);
+        Ok(account.lamports())
+    }
+
+    // Its a replica of `deposit_fees` but for the reward pool
+    // Deposits fees into the reward pool and returns the new balance of that account.
+    // This is for temporary use in the fee distribution process.
+    // TODO: When owner check is added replace DepositFeeError with a custom error type.
+    fn deposit_to_reward_pool(&self, pubkey: &Pubkey, fees: u64) -> Result<u64, DepositFeeError> {
+        let mut account = self
+            .get_account_with_fixed_root_no_cache(pubkey)
+            .unwrap_or_default();
+
+        // TODO: Commenting for now, as in our reward pool case its PDA
+        // We need to ensure this won't cause any side effects in the future.
+        // if !system_program::check_id(account.owner()) {
+        //     return Err(DepositFeeError::InvalidAccountOwner);
+        // }
+
+        // TODO: We can add a check here to ensure that the account owner is
+        // Badchain's custom BadRaffleProgram as its a reward pool PDA i.e. `CurrentRaffle`.
+
+        let recipient_pre_rent_state = self.rent_collector().get_account_rent_state(&account);
+        let distribution = account.checked_add_lamports(fees);
+        if distribution.is_err() {
+            return Err(DepositFeeError::LamportOverflow);
+        }
+
+        let recipient_post_rent_state = self.rent_collector().get_account_rent_state(&account);
+        let rent_state_transition_allowed = self
+            .rent_collector()
+            .transition_allowed(&recipient_pre_rent_state, &recipient_post_rent_state);
         if !rent_state_transition_allowed {
             return Err(DepositFeeError::InvalidRentPayingAccount);
         }
